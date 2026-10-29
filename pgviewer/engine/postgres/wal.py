@@ -1,7 +1,7 @@
 """WAL(pg_wal) 레코드 해석 — 커밋 시각, 힙 변경 이벤트, WAL 에만 남은 튜플.
 
-출처 (PostgreSQL 17):
-  src/include/access/xlog_internal.h   XLogPageHeaderData (짧은 24 / 긴 40바이트), XLOG_PAGE_MAGIC 0xD116
+출처 (PostgreSQL 17 · 18):
+  src/include/access/xlog_internal.h   XLogPageHeaderData (짧은 24 / 긴 40바이트), XLOG_PAGE_MAGIC (PG17 0xD116 · PG18 0xD118)
   src/include/access/xlogrecord.h      XLogRecord(24) · XLogRecordBlockHeader · BlockImageHeader · 블록 ID 252~255
   src/backend/access/transam/xlogreader.c  DecodeXLogRecord, RestoreBlockImage
   src/include/access/heapam_xlog.h     xl_heap_insert/delete/update/multi_insert, xl_heap_header
@@ -23,8 +23,10 @@ from .heap import (TUPLE_HEADER_SIZE, LP_NORMAL, line_pointers, page_problem, pa
                    parse_tuple_header)
 from .varlena import VarlenaError, lz4_decompress, pglz_decompress
 
-PAGE_MAGIC = {0xD116: 17, 0xD113: 16, 0xD110: 15, 0xD10D: 14}
-SUPPORTED_MAGIC = 0xD116  # BKPIMAGE 플래그 · heap2 연산 번호가 버전마다 달라 PG 17 만 해석한다
+PAGE_MAGIC = {0xD118: 18, 0xD116: 17, 0xD113: 16, 0xD110: 15, 0xD10D: 14}
+# PG 17 과 PG 18 은 XLogRecord · BKPIMAGE 플래그 · heap/heap2 opcode 가 동일하다 (xlog_internal.h 매직만 다름).
+# 그 이전 메이저는 플래그·opcode 가 달라 해석하지 않는다.
+SUPPORTED_MAGICS = frozenset({0xD116, 0xD118})
 XLP_FIRST_IS_CONTRECORD = 0x0001
 XLP_LONG_HEADER = 0x0002
 SHORT_PHD, LONG_PHD = 24, 40
@@ -174,14 +176,14 @@ class WalReader:
                 magic, info = struct.unpack_from("<HH", data, 0)
                 if magic in PAGE_MAGIC and info & XLP_LONG_HEADER:
                     ps = struct.unpack_from("<I", data, 36)[0] or 8192
-                    if magic != SUPPORTED_MAGIC:
+                    if magic not in SUPPORTED_MAGICS:
                         raise ValueError(f"WAL 페이지 magic {magic:#06x} (PG {PAGE_MAGIC[magic]}) — "
-                                         f"PG 17(0xD116) 형식만 해석합니다")
+                                         f"PG 17(0xD116) · PG 18(0xD118) 형식만 해석합니다")
             used = 0
             first_addr = None
             for off in range(0, len(data) - ps + 1, ps):
                 magic, info, tli, addr, rem = struct.unpack_from("<HHIQI", data, off)
-                if magic != SUPPORTED_MAGIC or addr % ps:
+                if magic not in SUPPORTED_MAGICS or addr % ps:
                     continue
                 used += 1
                 first_addr = addr if first_addr is None else first_addr

@@ -1,9 +1,10 @@
 """global/pg_control (ControlFileData) 해석.
 
 출처: src/include/catalog/pg_control.h (PostgreSQL 17, PG_CONTROL_VERSION 1700).
-오프셋은 x86_64 정렬 기준이며, 샘플(PG 17.x)에서 값의 타당성과 CRC 일치로 확인했다.
+오프셋은 x86_64 정렬 기준이며, 값의 타당성과 CRC 일치로 확인했다.
 
-다른 버전은 앞부분(시스템 식별자·버전·상태)과, floatFormat 상수(1234567.0)를 기준점으로 찾은
+PG 18 (PG_CONTROL_VERSION 1800) 은 CheckPoint 레이아웃이 PG 17 과 동일해 같은 오프셋 표를 사용한다.
+그 외 메이저는 앞부분(시스템 식별자·버전·상태)과, floatFormat 상수(1234567.0)를 기준점으로 찾은
 뒷부분(blcksz 등)만 해석한다. 이 기준점 방식은 버전 간 CheckPoint 구조 차이에 영향을 받지 않는다.
 """
 
@@ -28,8 +29,8 @@ DB_STATES = {
 
 WAL_LEVELS = {0: "minimal", 1: "replica", 2: "logical"}
 
-# PG 17 (1700) 의 앞부분: (이름, 오프셋, struct 형식)
-_FIELDS_1700 = [
+# PG 17 (1700) · PG 18 (1800) 의 앞부분: (이름, 오프셋, struct 형식)
+_FIELDS_17_18 = [
     ("system_identifier", 0, "Q"),
     ("pg_control_version", 8, "I"),
     ("catalog_version_no", 12, "I"),
@@ -85,7 +86,9 @@ _TAIL = [
     ("data_checksum_version", 44, "I"),
 ]
 _NONCE_REL = 48  # mock_authentication_nonce[32]
-_CRC_REL = 80
+# PG 17 은 nonce 끝(anchor+80) 바로 뒤에 CRC. PG 18 은 nonce 와 CRC 사이에 4바이트 필드가 하나 추가됐다.
+_CRC_REL_BY_VERSION = {1700: 80, 1800: 84}
+_CRC_REL_DEFAULT = 80
 
 
 def lsn_str(v: int) -> str:
@@ -107,13 +110,14 @@ def parse_control(data: bytes) -> dict:
     out["catalog_version_no"] = struct.unpack_from("<I", data, 12)[0]
     out["state"] = struct.unpack_from("<i", data, 16)[0]
 
-    if version == 1700:
-        for name, off, fmt in _FIELDS_1700:
+    if version in (1700, 1800):
+        for name, off, fmt in _FIELDS_17_18:
             out[name] = struct.unpack_from("<" + fmt, data, off)[0]
-        out["layout"] = "pg_control 1700 (PostgreSQL 17)"
+        pg = {1700: 17, 1800: 18}[version]
+        out["layout"] = f"pg_control {version} (PostgreSQL {pg})"
     else:
         out["warnings"].append(
-            f"pg_control_version {version} 은 앞부분·뒷부분만 해석합니다 (CheckPoint 상세는 PG 17 만)"
+            f"pg_control_version {version} 은 앞부분·뒷부분만 해석합니다 (CheckPoint 상세는 PG 17·18 만)"
         )
         out["layout"] = f"pg_control {version} (부분 해석)"
 
@@ -124,7 +128,7 @@ def parse_control(data: bytes) -> dict:
         out["float_format_offset"] = anchor
         for name, rel, fmt in _TAIL:
             out[name] = struct.unpack_from("<" + fmt, data, anchor + rel)[0]
-        crc_off = anchor + _CRC_REL
+        crc_off = anchor + _CRC_REL_BY_VERSION.get(version, _CRC_REL_DEFAULT)
         stored = struct.unpack_from("<I", data, crc_off)[0]
         calc = crc32c(data[:crc_off])
         out["crc_offset"] = crc_off
