@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+work/
+sample/
+sample.sha256
+CLAUDE.md

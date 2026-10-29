@@ -1,0 +1,883 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PostgreSQL Viewer</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --panel2: #f0f2f5; --line: #dde1e6; --text: #1d2329; --muted: #6b7480;
+  --accent: #2f6fdb; --accent-weak: #e6eefc;
+  --live: #2e7d4f; --live-bg: #e7f5ec; --deleted: #c62f2f; --deleted-bg: #fdeaea;
+  --updated: #b26a00; --updated-bg: #fff3df; --aborted: #6b7480; --aborted-bg: #eceef1;
+  --progress: #2f6fdb; --progress-bg: #e6eefc; --hl: #ffe58a; --hl2: #cfe3ff;
+  --carved: #7a4fd1; --carved-bg: #f1ebfc; --wal: #0f7c8c; --wal-bg: #e3f5f7; --diff: #fff1a8;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, "D2Coding", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14171b; --panel: #1b1f24; --panel2: #22272e; --line: #30363d; --text: #e3e7eb; --muted: #8b949e;
+    --accent: #6ea2ff; --accent-weak: #1d2a40;
+    --live: #5cc28a; --live-bg: #16291f; --deleted: #ff7b72; --deleted-bg: #3a1d1d;
+    --updated: #e3a33b; --updated-bg: #33270f; --aborted: #8b949e; --aborted-bg: #262b31;
+    --progress: #6ea2ff; --progress-bg: #1d2a40; --hl: #6b5a12; --hl2: #23406b;
+    --carved: #b99bff; --carved-bg: #2a2140; --wal: #5fc9d8; --wal-bg: #12303a; --diff: #574a10;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14171b; --panel: #1b1f24; --panel2: #22272e; --line: #30363d; --text: #e3e7eb; --muted: #8b949e;
+  --accent: #6ea2ff; --accent-weak: #1d2a40;
+  --live: #5cc28a; --live-bg: #16291f; --deleted: #ff7b72; --deleted-bg: #3a1d1d;
+  --updated: #e3a33b; --updated-bg: #33270f; --aborted: #8b949e; --aborted-bg: #262b31;
+  --progress: #6ea2ff; --progress-bg: #1d2a40; --hl: #6b5a12; --hl2: #23406b;
+  --carved: #b99bff; --carved-bg: #2a2140; --wal: #5fc9d8; --wal-bg: #12303a; --diff: #574a10;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--text); font: 13px/1.45 system-ui, "Segoe UI", "Malgun Gothic", sans-serif; }
+button, input, select { font: inherit; color: inherit; }
+button { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.small { padding: 1px 7px; font-size: 12px; }
+button:disabled { opacity: .5; cursor: default; }
+input[type=text], input[type=search], select { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+input:focus, select:focus { outline: 2px solid var(--accent-weak); border-color: var(--accent); }
+.mono { font-family: var(--mono); }
+.muted { color: var(--muted); }
+
+header { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
+header h1 { font-size: 15px; margin: 0; white-space: nowrap; }
+header h1 span { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 6px; }
+#openForm { display: flex; gap: 6px; flex: 1; min-width: 0; }
+#pathInput { flex: 1; min-width: 120px; }
+#sessionBar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line); font-size: 12px; white-space: nowrap; }
+.chip.ok { color: var(--live); border-color: var(--live); background: var(--live-bg); }
+.chip.bad { color: var(--deleted); border-color: var(--deleted); background: var(--deleted-bg); }
+
+.layout { display: grid; grid-template-columns: 290px minmax(0, 1fr); height: calc(100% - 49px); }
+aside#side { border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+#side .controls { padding: 10px; display: grid; gap: 6px; border-bottom: 1px solid var(--line); }
+#side .controls label { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+#relList { overflow: auto; flex: 1; padding: 4px 0 20px; }
+.schema-h { padding: 8px 12px 3px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; position: sticky; top: 0; background: var(--panel); }
+.rel { display: flex; justify-content: space-between; gap: 6px; padding: 4px 12px; cursor: pointer; border-left: 3px solid transparent; }
+.rel:hover { background: var(--panel2); }
+.rel.sel { background: var(--accent-weak); border-left-color: var(--accent); }
+.rel .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rel .sz { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.kind { font-size: 10px; padding: 0 5px; border-radius: 4px; background: var(--panel2); color: var(--muted); border: 1px solid var(--line); margin-left: 4px; }
+
+main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.tabs { display: flex; gap: 2px; padding: 8px 14px 0; border-bottom: 1px solid var(--line); background: var(--panel); overflow-x: auto; }
+.tab { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 6px 12px; color: var(--muted); white-space: nowrap; }
+.tab.on { color: var(--text); border-bottom-color: var(--accent); }
+.pane { display: none; flex: 1; min-height: 0; flex-direction: column; }
+.pane.on { display: flex; }
+.relhead { padding: 10px 14px 6px; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: baseline; }
+.relhead h2 { margin: 0; font-size: 16px; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; padding: 0 14px 8px; }
+.toolbar input[type=search] { width: 220px; }
+.toolbar label { display: inline-flex; gap: 4px; align-items: center; }
+.sep { width: 1px; height: 18px; background: var(--line); }
+.statechip { cursor: pointer; user-select: none; }
+.statechip input { margin: 0; }
+.st-live { color: var(--live); } .st-deleted { color: var(--deleted); } .st-updated { color: var(--updated); }
+.st-aborted, .st-unknown { color: var(--aborted); } .st-in_progress { color: var(--progress); }
+.src-heap { color: var(--text); } .src-carved { color: var(--carved); } .src-wal { color: var(--wal); }
+.banner { margin: 0 14px 8px; padding: 6px 10px; border-radius: 6px; background: var(--accent-weak); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.gridwrap { flex: 1; overflow: auto; border-top: 1px solid var(--line); background: var(--panel); }
+table.grid { border-collapse: separate; border-spacing: 0; min-width: 100%; }
+table.grid th, table.grid td { border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); padding: 3px 8px; text-align: left; vertical-align: top; white-space: nowrap; max-width: 380px; overflow: hidden; text-overflow: ellipsis; }
+table.grid th { position: sticky; top: 0; background: var(--panel2); z-index: 1; font-weight: 600; cursor: pointer; }
+table.grid th .ty { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
+table.grid th.dropped { text-decoration: line-through; color: var(--muted); }
+table.grid th.meta, table.grid td.meta { background: var(--panel2); font-family: var(--mono); font-size: 12px; }
+table.grid tr:hover td { background: var(--accent-weak); }
+table.grid tr.sel td { background: var(--hl2); }
+table.grid td.err { outline: 1px dashed var(--deleted); outline-offset: -2px; }
+tr.row-deleted td:not(.meta) { background: var(--deleted-bg); }
+tr.row-updated td:not(.meta) { background: var(--updated-bg); }
+tr.row-aborted td:not(.meta), tr.row-unknown td:not(.meta) { background: var(--aborted-bg); }
+.null { color: var(--muted); font-style: italic; }
+.badge { display: inline-block; padding: 0 6px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.badge.live { background: var(--live-bg); color: var(--live); }
+.badge.deleted { background: var(--deleted-bg); color: var(--deleted); }
+.badge.updated { background: var(--updated-bg); color: var(--updated); }
+.badge.aborted, .badge.unknown { background: var(--aborted-bg); color: var(--aborted); }
+.badge.in_progress { background: var(--progress-bg); color: var(--progress); }
+.badge.carved { background: var(--carved-bg); color: var(--carved); }
+.badge.wal { background: var(--wal-bg); color: var(--wal); }
+.link { color: var(--accent); text-decoration: underline dotted; cursor: pointer; }
+.chainbtn { color: var(--updated); cursor: pointer; text-decoration: underline dotted; }
+.timeval { color: var(--wal); }
+.pager { display: flex; gap: 8px; align-items: center; padding: 6px 14px; border-top: 1px solid var(--line); background: var(--panel); }
+.empty { padding: 40px; text-align: center; color: var(--muted); }
+.scroll { overflow: auto; flex: 1; padding: 12px 14px 30px; }
+.scroll h3 { font-size: 13px; margin: 14px 0 6px; }
+
+#detail { position: fixed; top: 49px; right: 0; bottom: 0; width: min(820px, 100%); background: var(--panel); border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(0,0,0,.12); transform: translateX(100%); transition: transform .15s; display: flex; flex-direction: column; z-index: 5; }
+#detail.on { transform: none; }
+#detail .dh { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+#detail .db { overflow: auto; padding: 10px 14px 30px; }
+#detail h3 { font-size: 13px; margin: 16px 0 6px; }
+table.kv { border-collapse: collapse; width: 100%; }
+table.kv td, table.kv th { border-bottom: 1px solid var(--line); padding: 3px 6px; text-align: left; vertical-align: top; }
+table.kv th { color: var(--muted); font-weight: 500; width: 30%; }
+table.kv td { word-break: break-all; }
+table.cols td, table.cols th { border-bottom: 1px solid var(--line); padding: 3px 6px; text-align: left; vertical-align: top; }
+table.cols { border-collapse: collapse; width: 100%; }
+table.cols tr:hover td { background: var(--hl); }
+table.cols td.v { word-break: break-all; white-space: pre-wrap; max-width: 320px; }
+table.cols td.chg { background: var(--diff); }
+table.cols tr.cur td { font-weight: 600; }
+.flags { display: flex; flex-wrap: wrap; gap: 4px; }
+.hex { font-family: var(--mono); font-size: 12px; line-height: 1.5; white-space: pre; background: var(--panel2); padding: 8px; border-radius: 6px; overflow: auto; }
+.hex .b.h { background: var(--hl); }
+.hex .b.hdr { color: var(--muted); }
+.hint { color: var(--muted); font-size: 11px; }
+.fullval { white-space: pre-wrap; word-break: break-all; font-family: var(--mono); font-size: 12px; background: var(--panel2); padding: 8px; border-radius: 6px; max-height: 50vh; overflow: auto; }
+.info-pane { overflow: auto; padding: 14px; display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; align-content: start; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.card h3 { margin: 0 0 8px; font-size: 13px; }
+#toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--deleted); color: #fff; padding: 8px 14px; border-radius: 6px; display: none; z-index: 10; max-width: 80%; }
+#toast.okmsg { background: var(--live); }
+#menu { position: fixed; z-index: 20; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 4px; max-height: 320px; overflow: auto; min-width: 260px; }
+#menu div { padding: 5px 8px; border-radius: 5px; cursor: pointer; white-space: nowrap; }
+#menu div:hover { background: var(--accent-weak); }
+.welcome { max-width: 680px; margin: 60px auto; padding: 0 16px; color: var(--muted); }
+.welcome h2 { color: var(--text); }
+.welcome code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; }
+@media (max-width: 760px) {
+  header { flex-wrap: wrap; }
+  .layout { grid-template-columns: 1fr; grid-template-rows: 220px 1fr; }
+  aside#side { border-right: 0; border-bottom: 1px solid var(--line); }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>PostgreSQL Viewer<span>PGDATA 직접 파싱 · 읽기 전용</span></h1>
+  <form id="openForm">
+    <input id="pathInput" type="text" placeholder="PGDATA 폴더 또는 zip 경로 (예: C:\cases\pgdata.zip)" autocomplete="off">
+    <button class="primary" type="submit">열기</button>
+    <button type="button" id="uploadBtn" title="zip 을 서버의 work/uploads 에 복사해 연다">zip 업로드</button>
+    <input type="file" id="fileInput" accept=".zip" hidden>
+  </form>
+  <div id="sessionBar"></div>
+  <button id="themeBtn" title="테마 전환">◐</button>
+</header>
+
+<div class="layout">
+  <aside id="side">
+    <div class="controls">
+      <select id="dbSel" disabled><option>데이터베이스</option></select>
+      <input id="relFilter" type="search" placeholder="테이블 이름 필터">
+      <label><input type="checkbox" id="showSys"> 시스템 카탈로그 · TOAST 보기</label>
+      <label><input type="checkbox" id="showEmpty" checked> 빈 테이블도 보기</label>
+    </div>
+    <div id="relList"></div>
+  </aside>
+
+  <main>
+    <div class="tabs">
+      <button class="tab on" data-pane="paneData">데이터</button>
+      <button class="tab" data-pane="paneCols">컬럼</button>
+      <button class="tab" data-pane="paneWal">WAL 기록</button>
+      <button class="tab" data-pane="paneIdx">인덱스 흔적</button>
+      <button class="tab" data-pane="paneInfo">클러스터 정보</button>
+    </div>
+
+    <section class="pane on" id="paneData">
+      <div id="welcome" class="welcome">
+        <h2>PGDATA 를 열어 주세요</h2>
+        <p>PostgreSQL 데이터 디렉토리(<code>PG_VERSION</code>, <code>global/</code>, <code>base/</code> 가 있는 폴더)나
+          그 폴더를 담은 zip 의 경로를 위에 입력하세요. 서버를 띄우지 않고 파일을 직접 읽으며, 원본은 수정하지 않습니다.</p>
+        <p>행 상태: <span class="badge live">live</span> 현재 행 ·
+          <span class="badge deleted">deleted</span> 삭제된 행 ·
+          <span class="badge updated">updated</span> 수정 전 버전 ·
+          <span class="badge aborted">aborted</span> 롤백된 INSERT ·
+          <span class="badge unknown">unknown</span> 판단 근거 부족</p>
+        <p>행 출처: 현재 파일 ·
+          <span class="badge carved">빈 공간</span> 페이지 빈 공간에서 복구 ·
+          <span class="badge wal">WAL</span> WAL 기록에서 복구</p>
+      </div>
+      <div id="dataView" hidden style="display:flex;flex-direction:column;flex:1;min-height:0">
+        <div class="relhead" id="relHead"></div>
+        <div class="toolbar">
+          <span id="stateChips" style="display:flex;gap:6px;flex-wrap:wrap"></span>
+          <span class="sep"></span>
+          <span id="sourceChips" style="display:flex;gap:6px;flex-wrap:wrap"></span>
+          <span class="sep"></span>
+          <label class="chip statechip" title="수정 이력(버전 체인)이 있는 행만 이력 순서대로"><input type="checkbox" id="onlyChained"> 수정 이력만</label>
+        </div>
+        <div class="toolbar">
+          <input id="search" type="search" placeholder="값 검색 (Enter)">
+          <label class="muted"><input type="checkbox" id="showMeta" checked> 시스템 정보</label>
+          <label class="muted"><input type="checkbox" id="showDropped" checked> 삭제된 컬럼</label>
+          <label class="muted" title="정수로 저장된 시각(epoch ms 등)과 트랜잭션 커밋 시각을 날짜로 표시 (UTC)"><input type="checkbox" id="timeMode"> 시각 변환</label>
+          <span style="flex:1"></span>
+          <button id="expCsv">CSV</button><button id="expJson">JSON</button>
+        </div>
+        <div id="navBanner" class="banner" hidden></div>
+        <div class="gridwrap"><table class="grid" id="grid"></table><div id="gridMsg" class="empty" hidden></div></div>
+        <div class="pager">
+          <button id="prev">이전</button><button id="next">다음</button>
+          <span id="pageInfo" class="muted"></span>
+          <span style="flex:1"></span>
+          <select id="pageSize"><option>50</option><option selected>100</option><option>200</option><option>500</option></select>
+        </div>
+      </div>
+    </section>
+
+    <section class="pane" id="paneCols">
+      <div class="gridwrap"><table class="grid" id="colGrid"></table></div>
+    </section>
+
+    <section class="pane" id="paneWal"><div class="scroll" id="walPane"><div class="empty">테이블을 고르세요</div></div></section>
+    <section class="pane" id="paneIdx"><div class="scroll" id="idxPane"><div class="empty">테이블을 고르세요</div></div></section>
+
+    <section class="pane" id="paneInfo">
+      <div class="info-pane" id="infoPane"><div class="empty">열린 입력이 없습니다</div></div>
+    </section>
+  </main>
+</div>
+
+<aside id="detail">
+  <div class="dh"><strong id="detailTitle">튜플</strong>
+    <span><button id="citeBtn" title="보고서에 붙일 수 있도록 근거(파일·오프셋·해시·트랜잭션·값)를 텍스트로 복사">인용 복사</button>
+    <button id="detailClose">닫기</button></span></div>
+  <div class="db" id="detailBody"></div>
+</aside>
+<div id="menu" hidden></div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+// 화면에 들어가는 값은 모두 증거 데이터다. 반드시 textContent 로만 넣는다 (innerHTML 금지).
+const $ = (s, r = document) => r.querySelector(s);
+const S = { sid: null, info: null, db: null, dbData: null, rel: null, relInfo: null,
+            offset: 0, limit: 100, states: null, sources: null, chained: false, q: "", sort: null, desc: false,
+            rids: null, rows: [], selRid: null, detail: null, nav: [] };
+
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === "class") e.className = v;
+    else if (k === "text") e.textContent = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const k of kids.flat()) if (k != null) e.append(k instanceof Node ? k : document.createTextNode(String(k)));
+  return e;
+}
+function toast(msg, ok = false) { const t = $("#toast"); t.textContent = msg; t.className = ok ? "okmsg" : ""; t.style.display = "block"; clearTimeout(toast._t); toast._t = setTimeout(() => t.style.display = "none", ok ? 2500 : 6000); }
+async function api(path, opts = {}) {
+  const r = await fetch(path, opts);
+  if (!r.ok) { let m = r.statusText; try { m = (await r.json()).detail || m; } catch {} throw new Error(m); }
+  return r.json();
+}
+const relApi = (p = "") => `/api/s/${S.sid}/db/${S.db}/rel/${S.rel}${p}`;
+const fmtSize = n => n == null ? "" : n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB";
+const STATE_LABEL = { live: "live", deleted: "deleted", updated: "updated", aborted: "aborted", in_progress: "in progress", unknown: "unknown" };
+const SOURCE_LABEL = { heap: "현재 파일", carved: "빈 공간", wal: "WAL" };
+const SYS_SCHEMAS = new Set(["pg_catalog", "information_schema", "pg_toast"]);
+
+function valueText(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+// 시각 표시 (UTC). ISO 문자열이나 epoch 숫자 → "YYYY-MM-DD HH:MM:SS.mmm"
+function fmtTime(v, unit) {
+  let d = null;
+  if (typeof v === "string" && /^\d{4}-\d\d-\d\dT/.test(v)) d = new Date(v);
+  else if (typeof v === "number" && v > 0) d = new Date(unit === "us" ? v / 1000 : v);
+  if (!d || isNaN(d)) return null;
+  return d.toISOString().replace("T", " ").replace("Z", "");
+}
+function epochHint(v, type) {
+  if (typeof v !== "number" || !Number.isInteger(v)) return null;
+  if (type !== "int8" && type !== "int4") return null;
+  if (v >= 1e12 && v < 1e13) return fmtTime(v, "ms") + " (epoch ms 로 볼 때, UTC)";
+  if (type === "int8" && v >= 1e9 && v < 1e10) return fmtTime(v * 1000, "ms") + " (epoch s 로 볼 때, UTC)";
+  return null;
+}
+const tidText = r => r.source === "carved" ? `(${r.tid[0]},—)` : `(${r.tid[0]},${r.tid[1]})`;
+
+// ------------------------------------------------------------ 세션
+$("#openForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const path = $("#pathInput").value.trim();
+  if (!path) return;
+  await withBusy(async () => openSession(await api("/api/open", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) })));
+});
+$("#uploadBtn").onclick = () => $("#fileInput").click();
+$("#fileInput").onchange = async () => {
+  const f = $("#fileInput").files[0]; if (!f) return;
+  const fd = new FormData(); fd.append("file", f);
+  await withBusy(async () => openSession(await api("/api/upload", { method: "POST", body: fd })));
+  $("#fileInput").value = "";
+};
+async function withBusy(fn) {
+  document.body.style.cursor = "progress";
+  try { await fn(); } catch (e) { toast(e.message); } finally { document.body.style.cursor = ""; }
+}
+async function openSession(sess) {
+  Object.assign(S, { sid: sess.id, db: null, dbData: null, rel: null, relInfo: null, rows: [], selRid: null, nav: [], wal: null });
+  $("#detail").classList.remove("on"); $("#dataView").hidden = true; $("#welcome").hidden = false;
+  S.info = await api(`/api/s/${S.sid}`);
+  renderSessionBar(); renderInfo();
+  const sel = $("#dbSel"); sel.replaceChildren(); sel.disabled = false;
+  const dbs = S.info.databases.filter(d => d.has_dir);
+  for (const d of dbs) sel.append(el("option", { value: d.oid, text: `${d.name}  (oid ${d.oid})` }));
+  const pick = dbs.find(d => !d.is_template && d.name !== "postgres") || dbs[0];
+  if (pick) { sel.value = pick.oid; await selectDb(pick.oid); }
+  pollHash();
+}
+function renderSessionBar() {
+  const s = S.info.session, c = S.info.cluster.control;
+  $("#sessionBar").replaceChildren(
+    el("span", { class: "chip", text: `PG ${s.pg_version}` }),
+    el("span", { class: "chip " + (c.state === 1 ? "ok" : "bad"), text: c.state_name, title: "pg_control 의 클러스터 상태" }),
+    el("span", { class: "chip mono", title: s.hash ? `${s.hash.kind} sha256: ${s.hash.value}` : "해시 계산 중",
+                 text: s.hash ? "sha256 " + s.hash.value.slice(0, 12) + "…" : (s.hash_error ? "해시 실패" : "해시 계산 중…") }),
+  );
+}
+async function pollHash() {
+  const sid = S.sid;
+  while (S.sid === sid && S.info && !S.info.session.hash && !S.info.session.hash_error) {
+    await new Promise(r => setTimeout(r, 2000));
+    if (S.sid !== sid) return;
+    try { S.info = await api(`/api/s/${S.sid}`); } catch { return; }
+    renderSessionBar(); renderInfo();
+  }
+}
+
+// ------------------------------------------------------------ DB · 릴레이션 목록
+$("#dbSel").onchange = e => withBusy(() => selectDb(+e.target.value));
+async function selectDb(oid) {
+  S.db = oid; S.dbData = await api(`/api/s/${S.sid}/db/${oid}`); S.nav = [];
+  renderRelList(); renderInfo();
+}
+["relFilter", "showSys", "showEmpty"].forEach(id => $("#" + id).addEventListener("input", renderRelList));
+function renderRelList() {
+  const list = $("#relList"); list.replaceChildren();
+  if (!S.dbData) return;
+  const f = $("#relFilter").value.toLowerCase(), sys = $("#showSys").checked, empty = $("#showEmpty").checked;
+  let cur = null;
+  for (const r of S.dbData.relations) {
+    if (r.kind === "i" || r.kind === "I") continue;
+    if (!sys && SYS_SCHEMAS.has(r.schema) && S.rel !== r.oid) continue;
+    if (!empty && !r.file_size) continue;
+    if (f && !(`${r.schema}.${r.name}`).toLowerCase().includes(f)) continue;
+    if (r.schema !== cur) { cur = r.schema; list.append(el("div", { class: "schema-h", text: cur })); }
+    list.append(el("div", { class: "rel" + (S.rel === r.oid ? " sel" : ""), title: `oid ${r.oid} · ${r.path || "저장 파일 없음"}`,
+      onclick: () => withBusy(() => selectRel(r.oid)) },
+      el("span", { class: "nm" }, r.name, r.kind !== "r" ? el("span", { class: "kind", text: r.kind_name }) : null),
+      el("span", { class: "sz", text: r.file_size == null ? "—" : fmtSize(r.file_size) })));
+  }
+  if (!list.children.length) list.append(el("div", { class: "empty", text: "표시할 릴레이션이 없습니다" }));
+}
+
+// ------------------------------------------------------------ 데이터
+let relSeq = 0;
+async function selectRel(oid, opts = {}) {
+  const seq = ++relSeq;
+  const info = await api(`/api/s/${S.sid}/db/${S.db}/rel/${oid}`);
+  if (seq !== relSeq) return;
+  Object.assign(S, { rel: oid, offset: 0, q: "", sort: null, desc: false, states: null, sources: null,
+                     chained: false, rids: opts.rids || null, relInfo: info, rows: [], selRid: null, walData: null, idxData: null });
+  $("#search").value = ""; $("#onlyChained").checked = false; $("#detail").classList.remove("on");
+  renderRelList(); renderRelHead(); renderCols(); switchTab("paneData");
+  $("#welcome").hidden = true; $("#dataView").hidden = false;
+  await loadRows();
+  if (opts.openRid) { const r = S.rows.find(x => x.rid === opts.openRid); if (r) await openDetail(r); }
+}
+function chipGroup(box, counts, labels, cls, key) {
+  box.replaceChildren();
+  const all = Object.keys(counts);
+  for (const [k, n] of Object.entries(counts)) {
+    const cb = el("input", { type: "checkbox", checked: true, "data-k": k });
+    cb.onchange = () => {
+      const on = [...box.querySelectorAll("input:checked")].map(x => x.dataset.k);
+      S[key] = on.length === all.length ? null : on.join(","); S.offset = 0; withBusy(loadRows);
+    };
+    box.append(el("label", { class: "chip statechip" }, cb, el("span", { class: cls(k), text: labels[k] || k }), el("b", { text: n })));
+  }
+}
+function renderRelHead() {
+  const { relation: r, stats, error } = S.relInfo;
+  $("#relHead").replaceChildren(...[
+    el("h2", { class: "mono", text: `${r.schema}.${r.name}` }),
+    el("span", { class: "muted", text: `${r.kind_name} · oid ${r.oid} · filenode ${r.filenode || "(map)"}` }),
+    el("span", { class: "muted mono", text: r.path || "저장 파일 없음" }),
+    stats && stats.chains ? el("span", { class: "st-updated", text: `수정 이력 ${stats.chains}개` }) : null,
+    stats && stats.rows_with_errors ? el("span", { class: "chip bad", text: `해석 경고 ${stats.rows_with_errors}행`, title: "빨간 점선 칸에 마우스를 올리면 이유가 보인다" }) : null,
+    stats && stats.damaged_pages && stats.damaged_pages.length ? el("span", { class: "chip bad", text: `손상 페이지 ${stats.damaged_pages.length}개 (읽지 않음)`,
+      title: stats.damaged_pages.slice(0, 20).map(p => `블록 ${p.block}: ${p.problem}`).join("\n") }) : null,
+    error ? el("span", { class: "st-deleted", text: error }) : null,
+  ].filter(Boolean));
+  if (!stats) { $("#stateChips").replaceChildren(); $("#sourceChips").replaceChildren(); return; }
+  chipGroup($("#stateChips"), stats.by_state, STATE_LABEL, k => "st-" + k, "states");
+  chipGroup($("#sourceChips"), stats.by_source, SOURCE_LABEL, k => "src-" + k, "sources");
+}
+$("#onlyChained").onchange = e => { S.chained = e.target.checked; S.offset = 0; withBusy(loadRows); };
+$("#search").addEventListener("keydown", e => { if (e.key === "Enter") { S.q = e.target.value; S.offset = 0; withBusy(loadRows); } });
+$("#pageSize").onchange = e => { S.limit = +e.target.value; S.offset = 0; withBusy(loadRows); };
+$("#prev").onclick = () => { S.offset = Math.max(0, S.offset - S.limit); withBusy(loadRows); };
+$("#next").onclick = () => { S.offset += S.limit; withBusy(loadRows); };
+["showMeta", "showDropped", "timeMode"].forEach(id => $("#" + id).addEventListener("change", () => { if (S.relInfo) renderGrid(); if (S.detail) renderDetail(); }));
+function qs(extra = {}) {
+  const p = new URLSearchParams();
+  if (S.rids) p.set("rids", S.rids.join(","));
+  else {
+    if (S.states) p.set("states", S.states);
+    if (S.sources) p.set("sources", S.sources);
+    if (S.chained) p.set("chained", "true");
+    if (S.q) p.set("q", S.q);
+  }
+  for (const [k, v] of Object.entries(extra)) if (v != null) p.set(k, v);
+  return p.toString();
+}
+async function loadRows() {
+  const msg = $("#gridMsg");
+  renderBanner();
+  if (!S.relInfo.stats) { $("#grid").replaceChildren(); msg.hidden = false;
+    msg.textContent = S.relInfo.error || `${S.relInfo.relation.kind_name}: 저장된 행 데이터가 없는 릴레이션입니다`;
+    $("#pageInfo").textContent = ""; return; }
+  const rel = S.rel;
+  const d = await api(relApi("/rows?") + qs({ offset: S.offset, limit: S.limit, sort: S.sort, desc: S.sort != null ? S.desc : null }));
+  if (rel !== S.rel) return;
+  S.rows = d.rows; S.total = d.total;
+  msg.hidden = d.total > 0; msg.textContent = "조건에 맞는 행이 없습니다";
+  $("#pageInfo").textContent = d.total ? `${d.offset + 1}–${Math.min(d.offset + d.rows.length, d.total)} / ${d.total}행` : "0행";
+  $("#prev").disabled = S.offset === 0; $("#next").disabled = S.offset + S.limit >= d.total;
+  renderGrid();
+}
+function renderBanner() {
+  const b = $("#navBanner");
+  if (!S.rids && !S.nav.length) { b.hidden = true; return; }
+  b.hidden = false;
+  b.replaceChildren(
+    S.nav.length ? el("button", { class: "small", text: "← 돌아가기", onclick: goBack }) : null,
+    S.rids ? el("span", { text: `링크로 찾아온 행 ${S.rids.length}개만 보는 중` }) : el("span", { class: "muted", text: `이동 기록 ${S.nav.length}단계` }),
+    S.rids ? el("button", { class: "small", text: "테이블 전체 보기", onclick: () => { S.rids = null; S.offset = 0; withBusy(loadRows); } }) : null);
+}
+function renderGrid() {
+  const cols = S.relInfo.columns, meta = $("#showMeta").checked, dropped = $("#showDropped").checked, tmode = $("#timeMode").checked;
+  const tcols = S.relInfo.time_columns || {};
+  const vis = cols.map((c, i) => [c, i]).filter(([c]) => dropped || !c.dropped);
+  const head = el("tr");
+  if (meta) {
+    for (const m of ["상태", "출처", "tid", "xmin", "xmax", "이력"]) head.append(el("th", { class: "meta", text: m }));
+    if (tmode) for (const m of ["만든 시각 (UTC)", "지운 시각 (UTC)"]) head.append(el("th", { class: "meta", text: m, title: "xmin/xmax 트랜잭션의 커밋 시각 (WAL)" }));
+  }
+  for (const [c, i] of vis) {
+    const arrow = S.sort === i ? (S.desc ? " ▼" : " ▲") : "";
+    const tu = tcols[i];
+    head.append(el("th", { class: c.dropped ? "dropped" : null, title: c.dropped ? "DROP 된 컬럼 — 남아 있는 원시 바이트" : `attnum ${c.num}${tu ? " · 시각 컬럼(" + tu + ")" : ""}`,
+      onclick: () => { if (S.sort === i) S.desc = !S.desc; else { S.sort = i; S.desc = false; } S.offset = 0; withBusy(loadRows); } },
+      c.name + arrow, el("span", { class: "ty", text: c.dropped ? "dropped" : c.type + (tu && tmode ? " → 시각" : "") })));
+  }
+  const body = [];
+  for (const r of S.rows) {
+    const rowErr = r.errors["*"];
+    const tr = el("tr", { class: "row-" + r.state + (S.selRid === r.rid ? " sel" : ""), onclick: () => openDetail(r) });
+    if (meta) {
+      tr.append(el("td", { class: "meta" + (rowErr ? " err" : ""), title: rowErr || null },
+        el("span", { class: "badge " + r.state, text: STATE_LABEL[r.state] || r.state }), rowErr ? " ⚠" : null));
+      tr.append(el("td", { class: "meta" }, r.source === "heap" ? el("span", { class: "muted", text: "파일" }) : el("span", { class: "badge " + r.source, text: SOURCE_LABEL[r.source] })));
+      tr.append(el("td", { class: "meta", text: tidText(r) }));
+      tr.append(el("td", { class: "meta", text: r.xmin, title: `${r.xmin_status}${r.xmin_time ? " · " + r.xmin_time : ""}` }));
+      tr.append(el("td", { class: "meta", text: r.xmax || "", title: `${r.xmax_status}${r.xmax_time ? " · " + r.xmax_time : ""}` }));
+      const ch = r.chain;
+      tr.append(el("td", { class: "meta" }, ch ? el("span", { class: "chainbtn", text: `${ch.pos}/${ch.len}`, title: "수정 이력 — 누르면 상세에서 버전 비교",
+        onclick: ev => { ev.stopPropagation(); openDetail(r, true); } }) : ""));
+      if (tmode) {
+        tr.append(el("td", { class: "meta timeval", text: fmtTime(r.xmin_time) || "" }));
+        tr.append(el("td", { class: "meta timeval", text: fmtTime(r.xmax_time) || "" }));
+      }
+    }
+    for (const [c, i] of vis) {
+      const v = r.values[i], err = r.errors[c.name], links = (r.links || {})[i];
+      let t = valueText(v);
+      const shown = tmode && tcols[i] && typeof v === "number" ? fmtTime(v, tcols[i]) : null;
+      const td = el("td", { class: err ? "err" : null, title: err || (shown ? `원래 값 ${t}` : (t && t.length > 60 ? t.slice(0, 2000) : null)) });
+      if (t === null) td.append(el("span", { class: "null", text: !err ? "NULL" : err.startsWith("missing") ? "missing" : "해석 불가" }));
+      else if (links) td.append(el("span", { class: "link", text: t, title: "→ " + links.map(l => `${l.name}.${l.column} (${l.state})`).join(", "),
+        onclick: ev => { ev.stopPropagation(); followLink(links, ev); } }));
+      else if (shown) td.append(el("span", { class: "timeval", text: shown }));
+      else td.textContent = t.length > 300 ? t.slice(0, 300) + "…" : t;
+      tr.append(td);
+    }
+    body.push(tr);
+  }
+  $("#grid").replaceChildren(el("thead", {}, head), el("tbody", {}, body));
+}
+function renderCols() {
+  const tcols = S.relInfo.time_columns || {};
+  const head = el("tr", {}, ["#", "이름", "타입", "attlen", "align", "NOT NULL", "비고"].map(h => el("th", { text: h })));
+  const rows = S.relInfo.columns.map((c, i) => el("tr", {},
+    el("td", { text: c.num }), el("td", { class: "mono", text: c.name }), el("td", { text: c.type ?? "" }),
+    el("td", { text: c.len }), el("td", { text: c.align }), el("td", { text: c.notnull ? "✓" : "" }),
+    el("td", { text: c.dropped ? "DROP 된 컬럼" : tcols[i] ? `시각으로 보임 (epoch ${tcols[i]})` : "" })));
+  $("#colGrid").replaceChildren(el("thead", {}, head), el("tbody", {}, rows));
+}
+$("#expCsv").onclick = () => location.href = relApi("/export?") + qs({ format: "csv" });
+$("#expJson").onclick = () => location.href = relApi("/export?") + qs({ format: "json" });
+
+// ------------------------------------------------------------ 링크 이동
+function followLink(links, ev) {
+  const byTable = {};
+  for (const l of links) (byTable[l.oid] = byTable[l.oid] || []).push(l);
+  const tables = Object.values(byTable);
+  if (tables.length === 1) return goTo(tables[0][0].oid, tables[0]);
+  const m = $("#menu"); m.replaceChildren(el("div", { class: "muted", text: "어느 테이블로 갈까요?" }));
+  for (const ls of tables) m.append(el("div", { text: `${ls[0].schema}.${ls[0].name}.${ls[0].column} — ${ls.length}행`, onclick: () => { m.hidden = true; goTo(ls[0].oid, ls); } }));
+  m.style.left = Math.min(ev.clientX, innerWidth - 300) + "px"; m.style.top = Math.min(ev.clientY + 8, innerHeight - 200) + "px"; m.hidden = false;
+}
+document.addEventListener("click", e => { if (!$("#menu").contains(e.target)) $("#menu").hidden = true; }, true);
+async function goTo(oid, targets) {
+  S.nav.push({ rel: S.rel, rids: S.rids, offset: S.offset });
+  if ($("#showSys").checked === false && SYS_SCHEMAS.has(targets[0].schema)) $("#showSys").checked = true;
+  await withBusy(() => selectRel(oid, { rids: targets.map(t => t.rid), openRid: targets.length === 1 ? targets[0].rid : null }));
+}
+async function goBack() {
+  const p = S.nav.pop(); if (!p) return;
+  const nav = S.nav;
+  await withBusy(async () => { await selectRel(p.rel, { rids: p.rids }); S.nav = nav; S.offset = p.offset; await loadRows(); });
+}
+
+// ------------------------------------------------------------ 행 상세
+$("#detailClose").onclick = () => { $("#detail").classList.remove("on"); S.selRid = null; S.detail = null; if (S.relInfo) renderGrid(); };
+document.addEventListener("keydown", e => { if (e.key === "Escape") { $("#menu").hidden = true; $("#detailClose").click(); } });
+async function openDetail(row, focusVersions = false) {
+  S.selRid = row.rid; renderGrid();
+  let d;
+  try { d = await api(relApi("/row?rid=") + encodeURIComponent(row.rid)); } catch (e) { toast(e.message); return; }
+  S.detail = { d, row, focusVersions };
+  renderDetail();
+  $("#detail").classList.add("on");
+}
+const kv = pairs => el("table", { class: "kv" }, pairs.filter(Boolean).map(([k, v]) => el("tr", {}, el("th", { text: k }), el("td", {}, v ?? ""))));
+function xactText(xid, status, x) {
+  if (!xid) return "—";
+  const t = x && x.time ? ` · ${x.status === "aborted" ? "롤백" : "커밋"} 시각 ${fmtTime(x.time)} UTC (WAL ${x.lsn})` : "";
+  return `${xid}  (${status}${x && x.status !== status ? ", WAL: " + x.status : ""})${t}`;
+}
+function renderDetail() {
+  const { d, row, focusVersions } = S.detail;
+  const cols = S.relInfo.columns, h = d.header, tcols = S.relInfo.time_columns || {}, tmode = $("#timeMode").checked;
+  $("#detailTitle").textContent = `${SOURCE_LABEL[d.source]} · ${tidText(row)} · ${STATE_LABEL[d.state] || d.state}`;
+  const b = $("#detailBody"); b.replaceChildren();
+  // 출처 · 위치
+  if (d.source === "wal") {
+    const f = d.wal && d.wal.fate;
+    b.append(el("h3", { text: "출처: WAL 에서 복구" }), kv([
+      ["처음 나타난 LSN", el("span", { class: "mono", text: d.wal.first_lsn })],
+      ["사용한 기록", el("span", { class: "mono", text: `${d.wal_lsn} (${({ fpi: "전체 페이지 이미지", insert: "INSERT 레코드", update: "UPDATE 레코드", multi_insert: "MULTI_INSERT 레코드" })[d.wal_source] || d.wal_source})` })],
+      ["원래 위치", `블록 ${d.block} · 라인 포인터 ${d.lp}`],
+      ["결말", f ? `${f.op} · xid ${f.xid} · LSN ${f.lsn}${f.time ? " · " + fmtTime(f.time) + " UTC" : ""}${f.new_tid ? " · 새 위치 (" + f.new_tid.join(",") + ")" : ""}` : "WAL 에 삭제·수정 기록 없음 (VACUUM FULL·재작성 등으로 사라졌을 수 있음)"],
+      ["헤더", d.wal.synthetic_header ? "합성 — INSERT/UPDATE 레코드에는 23바이트 고정부가 없어 xmin = 레코드 트랜잭션, xmax = 0, ctid = 자기 위치로 채웠다 (원시 바이트의 앞 23바이트는 원본이 아니다)" : "원본 (전체 페이지 이미지)"],
+      d.wal.reconstructed ? ["재구성", "UPDATE 레코드가 옛 튜플과 같은 앞뒤 바이트를 생략해, WAL 안에서 이어 추적한 옛 튜플로 채웠다"] : null,
+    ]));
+  } else {
+    b.append(el("h3", { text: d.source === "carved" ? "출처: 페이지 빈 공간에서 복구 (라인 포인터 없음)" : "위치" }), kv([
+      ["파일", el("span", { class: "mono", text: d.file })],
+      ["파일 오프셋", el("span", { class: "mono", text: `${d.file_offset} (0x${d.file_offset.toString(16)}) — 위 파일 기준` })],
+      d.source === "carved" ? ["블록 / 페이지 내 오프셋", `${d.block} / ${d.page_offset}`] : ["블록 / 라인 포인터", `${d.block} / ${d.lp} (lp_off ${d.lp_off}, lp_len ${d.lp_len})`],
+      d.page ? ["페이지 LSN", el("span", { class: "mono", text: d.page.lsn })] : null,
+      d.carve ? ["신뢰도", d.carve.confidence === "low" ? "낮음 — 가변 길이 컬럼이 없어 헤더 조건만으로 검증됨" : "보통 — 모든 컬럼이 분해·디코딩됨"] : null,
+      d.carve && d.carve.note ? ["판정 메모", d.carve.note] : null,
+    ]));
+  }
+  // 트랜잭션
+  const flags = el("div", { class: "flags" }, [...h.infomask_flags, ...h.infomask2_flags].map(f => el("span", { class: "chip mono", text: f })));
+  b.append(el("h3", { text: "트랜잭션 · 튜플 헤더" }), kv([
+    ["상태", el("span", { class: "badge " + d.state, text: STATE_LABEL[d.state] || d.state })],
+    ["xmin (만든 트랜잭션)", xactText(h.xmin, d.xmin_status, d.xmin_xact)],
+    ["xmax (지운/바꾼 트랜잭션)", xactText(h.xmax || (row.xmax !== h.xmax ? row.xmax : 0), d.xmax_status, d.xmax_xact)],
+    ["ctid", `(${h.ctid[0]},${h.ctid[1]})` + (d.state === "updated" ? "  → 새 버전 위치" : "")],
+    ["infomask", el("div", {}, el("span", { class: "mono", text: `0x${h.infomask.toString(16).padStart(4, "0")} / 0x${h.infomask2.toString(16).padStart(4, "0")}` }), flags)],
+    ["natts / t_hoff", `${h.natts} / ${h.hoff}`],
+  ]));
+  // 버전 이력
+  if (d.versions && d.versions.length) {
+    const vis = cols.map((c, i) => [c, i]).filter(([c]) => !c.dropped);
+    const changed = new Set();
+    for (let k = 1; k < d.versions.length; k++)
+      for (const [, i] of vis) if (JSON.stringify(d.versions[k].values[i]) !== JSON.stringify(d.versions[k - 1].values[i])) changed.add(i);
+    const show = vis.filter(([, i]) => changed.has(i));
+    const head = el("tr", {}, ["#", "출처 · 상태", "만든 시각 (UTC)"].map(x => el("th", { text: x })), show.map(([c]) => el("th", { class: "mono", text: c.name })));
+    const body = d.versions.map((v, k) => el("tr", { class: v.rid === d.rid ? "cur" : null, style: "cursor:pointer", title: "이 버전 보기",
+      onclick: () => openDetail({ ...v, errors: {}, links: {} }) },
+      el("td", { text: `v${k + 1}`, title: v.chain && v.chain.link === "inferred" ? "앞 버전과 '추정' 연결 (빈 공간 행 — 위치 후보가 하나뿐)" : null },
+        v.chain && v.chain.link === "inferred" ? el("span", { class: "muted", text: " (추정)" }) : null),
+      el("td", {}, el("span", { class: "badge " + v.state, text: STATE_LABEL[v.state] }), " ", v.source !== "heap" ? el("span", { class: "badge " + v.source, text: SOURCE_LABEL[v.source] }) : null),
+      el("td", { class: "mono", text: fmtTime(v.xmin_time) || "?" }),
+      show.map(([c, i]) => {
+        const t = valueText(v.values[i]);
+        const diff = k > 0 && JSON.stringify(v.values[i]) !== JSON.stringify(d.versions[k - 1].values[i]);
+        const disp = tmode && tcols[i] && typeof v.values[i] === "number" ? fmtTime(v.values[i], tcols[i]) : t;
+        return el("td", { class: "v" + (diff ? " chg" : ""), text: disp === null ? "NULL" : disp.length > 200 ? disp.slice(0, 200) + "…" : disp });
+      })));
+    const sec = el("div", {}, el("h3", { text: `수정 이력 — ${d.versions.length}개 버전 (바뀐 컬럼만, 노란 칸이 이전 버전과 다른 값)` }),
+      show.length ? el("table", { class: "cols" }, el("thead", {}, head), el("tbody", {}, body)) : el("div", { class: "hint", text: "값이 같은 버전들 (잠금·통계 갱신 등)" }));
+    b.append(sec);
+    if (focusVersions) setTimeout(() => sec.scrollIntoView({ block: "start" }), 0);
+  }
+  // 컬럼
+  const colBody = [];
+  (d.spans || []).forEach((sp, i) => {
+    const c = cols[i], v = row.values ? row.values[i] : null, t = valueText(v), err = row.errors ? row.errors[c.name] : null;
+    const tf = tcols[i] && typeof v === "number" ? fmtTime(v, tcols[i]) : null;
+    const hint = tf ? tf + ` (epoch ${tcols[i]}, UTC)` : epochHint(v, c.type);
+    const valCell = el("td", { class: "v" });
+    if (t === null) valCell.append(el("span", { class: "null", text: sp.missing ? "missing" : "NULL" }));
+    else valCell.append(t.length > 600 ? t.slice(0, 600) + "…" : t);
+    if (hint) valCell.append(el("div", { class: "hint", text: hint }));
+    if (err) valCell.append(el("div", { class: "st-deleted", text: err }));
+    if (t && t.length > 600) valCell.append(el("button", { class: "small", text: "전체 보기", onclick: ev => { ev.stopPropagation(); valCell.replaceChildren(el("div", { class: "fullval", text: t })); } }));
+    let store = sp.varlena || "";
+    if (sp.toast) store += ` (toast ${sp.toast.compressed ? COMP(sp.toast.method) + " " : ""}valueid ${sp.toast.valueid}, ${sp.toast.rawsize - 4}B)`;
+    colBody.push(el("tr", { onmouseenter: () => hl(sp), onmouseleave: () => hl(null) },
+      el("td", { class: "mono", text: c.name + (c.dropped ? " (dropped)" : "") }),
+      el("td", { class: "mono", text: sp.start == null ? "—" : `${sp.start}+${sp.len}` }),
+      el("td", { text: store }), valCell));
+  });
+  b.append(el("h3", { text: "컬럼 (튜플 내 오프셋+길이 · 저장 방식 · 값)" }),
+    el("table", { class: "cols" }, el("thead", {}, el("tr", {}, ["컬럼", "위치", "저장", "값"].map(x => el("th", { text: x })))), el("tbody", {}, colBody)),
+    el("div", { class: "hint", text: "행에 마우스를 올리면 아래 헥스에서 해당 바이트가 강조된다. 오프셋은 튜플 시작 기준이다." }));
+  if (d.deform_error) b.append(el("div", { class: "st-deleted", text: "분해 오류: " + d.deform_error }));
+  b.append(el("h3", { text: `원시 바이트 (${d.hex.length / 2} B, 앞 ${h.hoff} B 는 헤더)` }), hexView(d.hex, h.hoff));
+}
+const COMP = m => ({ 0: "pglz", 1: "lz4" }[m] || "압축");
+let hexBytes = [];
+function hexView(hex, hoff) {
+  const box = el("div", { class: "hex" }); hexBytes = [];
+  const n = hex.length / 2;
+  for (let row = 0; row < n; row += 16) {
+    box.append(el("span", { class: "muted", text: row.toString(16).padStart(4, "0") + "  " }));
+    let asc = "";
+    for (let i = row; i < row + 16; i++) {
+      if (i < n) {
+        const by = parseInt(hex.substr(i * 2, 2), 16);
+        const s = el("span", { class: "b" + (i < hoff ? " hdr" : ""), text: hex.substr(i * 2, 2) });
+        hexBytes.push(s); box.append(s, " ");
+        asc += by >= 32 && by < 127 ? String.fromCharCode(by) : ".";
+      } else box.append("   ");
+      if (i === row + 7) box.append(" ");
+    }
+    box.append(el("span", { class: "muted", text: " " + asc }), "\n");
+  }
+  return box;
+}
+function hl(sp) {
+  hexBytes.forEach(s => s.classList.remove("h"));
+  if (!sp || sp.start == null) return;
+  for (let i = sp.start; i < sp.start + sp.len && i < hexBytes.length; i++) hexBytes[i].classList.add("h");
+  hexBytes[sp.start]?.scrollIntoView({ block: "nearest" });
+}
+
+// 보고서 인용: 증거 위치·해시·트랜잭션·값을 평문으로
+$("#citeBtn").onclick = async () => {
+  if (!S.detail) return;
+  const { d, row } = S.detail, s = S.info.session, rel = S.relInfo.relation;
+  const dbn = (S.info.databases.find(x => x.oid === S.db) || {}).name;
+  const L = ["[PostgreSQL Viewer 인용]",
+    `입력: ${s.input}` + (s.hash ? ` (SHA-256 ${s.hash.value}${s.hash.kind === "manifest" ? ", 파일 목록 해시" : ""})` : ""),
+    `PGDATA: ${s.pgdata} · PostgreSQL ${s.pg_version}`,
+    `데이터베이스: ${dbn} (oid ${S.db}) · 테이블: ${rel.schema}.${rel.name} (oid ${rel.oid})`,
+    `행: ${d.rid} · 출처 ${SOURCE_LABEL[d.source]} · 상태 ${d.state}`];
+  if (d.source === "wal") {
+    L.push(`WAL: ${d.wal_lsn} (${d.wal_source}), 처음 LSN ${d.wal.first_lsn}, 원래 위치 블록 ${d.block} lp ${d.lp}` + (d.wal.fate ? `, 결말 ${d.wal.fate.op} @ ${d.wal.fate.lsn}` : ""));
+    if (d.wal.synthetic_header) L.push("주의: 튜플 헤더 23바이트는 WAL 레코드로부터 합성 (xmin = 레코드 트랜잭션, ctid = 자기 위치) — 아래 튜플 해시는 합성 바이트 기준");
+    if (d.wal.reconstructed) L.push("주의: UPDATE 의 생략된 앞뒤 바이트를 WAL 안의 옛 튜플로 재구성");
+  } else {
+    L.push(`위치: ${d.file} + ${d.file_offset} (0x${d.file_offset.toString(16)}) · 블록 ${d.block}` + (d.source === "carved" ? ` · 페이지 내 오프셋 ${d.page_offset} (빈 공간)` : ` · lp ${d.lp}`));
+    if (d.carve) L.push(`빈 공간 복구 신뢰도: ${d.carve.confidence}` + (d.carve.note ? ` · ${d.carve.note}` : ""));
+  }
+  const xt = x => x && x.time ? `, ${x.time}` : "";
+  L.push(`xmin ${d.header.xmin} (${d.xmin_status}${xt(d.xmin_xact)}) · xmax ${d.header.xmax || row.xmax || 0} (${d.xmax_status}${xt(d.xmax_xact)}) · ctid (${d.header.ctid.join(",")})`);
+  if (row.chain) L.push(`수정 이력: ${row.chain.len}개 버전 중 ${row.chain.pos}번째`);
+  L.push("값:");
+  S.relInfo.columns.forEach((c, i) => { if (!c.dropped) { const t = valueText(row.values?.[i]); L.push(`  ${c.name} = ${t === null ? "NULL" : t}`); } });
+  L.push(`튜플 SHA-256: ${await sha256hex(d.hex)}`);
+  const text = L.join("\n");
+  try { await navigator.clipboard.writeText(text); toast("인용을 클립보드에 복사했습니다", true); }
+  catch { const ta = el("textarea", {}); ta.value = text; document.body.append(ta); ta.select(); document.execCommand("copy"); ta.remove(); toast("인용을 복사했습니다", true); }
+};
+async function sha256hex(hex) {
+  const bytes = new Uint8Array(hex.match(/../g).map(x => parseInt(x, 16)));
+  const h = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(h)].map(x => x.toString(16).padStart(2, "0")).join("");
+}
+
+// ------------------------------------------------------------ WAL 기록 · 인덱스 흔적
+const OP_LABEL = { INSERT: "INSERT", DELETE: "DELETE", UPDATE: "UPDATE", HOT_UPDATE: "UPDATE(HOT)", MULTI_INSERT: "MULTI_INSERT", FPI: "페이지 이미지", LOCK: "LOCK", INPLACE: "INPLACE", TRUNCATE: "TRUNCATE" };
+async function loadWal(op = "") {
+  const pane = $("#walPane");
+  if (!S.rel) return;
+  const rel = S.rel;  // 늦게 온 응답이 다른 테이블의 화면을 덮지 않게
+  if (!S.walData || S.walData.op !== op) {
+    pane.replaceChildren(el("div", { class: "empty", text: "WAL 을 읽는 중…" }));
+    let d;
+    try { d = await api(relApi("/wal?") + new URLSearchParams(op ? { op } : {})); }
+    catch (e) { if (rel === S.rel) pane.replaceChildren(el("div", { class: "empty st-deleted", text: "WAL 을 읽지 못했습니다: " + e.message })); return; }
+    if (rel !== S.rel) return;
+    S.walData = { ...d, op };
+  }
+  const { summary, events, ops, total } = S.walData;
+  if (!summary.available) { pane.replaceChildren(el("div", { class: "empty", text: "WAL 을 읽지 못했습니다: " + (summary.error || "") })); return; }
+  const all = Object.values(ops).reduce((a, b) => a + b, 0);
+  const sel = el("select", {}, el("option", { value: "", text: `모든 작업 (${all})` }), Object.entries(ops).map(([o, n]) => el("option", { value: o, text: `${OP_LABEL[o] || o} (${n})` })));
+  sel.value = op; sel.onchange = () => withBusy(() => loadWal(sel.value));
+  const tbl = el("table", { class: "grid" },
+    el("thead", {}, el("tr", {}, ["LSN", "트랜잭션 시각 (UTC)", "xid", "작업", "블록", "오프셋", "내용"].map(x => el("th", { text: x })))),
+    el("tbody", {}, events.map(e => el("tr", { class: e.op === "DELETE" ? "row-deleted" : e.op.includes("UPDATE") ? "row-updated" : null },
+      el("td", { class: "mono", text: e.lsn }), el("td", { class: "mono", text: fmtTime(e.time) || "", title: e.xact_status || "" }),
+      el("td", { class: "mono", text: e.xid, title: e.xact_status || "" }), el("td", { text: (OP_LABEL[e.op] || e.op) + (e.super ? " (투기적 INSERT 취소)" : "") }),
+      el("td", { text: e.block }), el("td", { text: e.offnum ?? "" }),
+      el("td", { class: "muted", text: e.op === "FPI" ? `튜플 ${e.tuples}개 (${e.record})` : e.new_offnum != null ? `→ (${e.new_block},${e.new_offnum})` : e.count != null ? `${e.count}개` : "" })))));
+  pane.replaceChildren(...[
+    el("div", { class: "muted", text: `이 테이블 파일(filenode)에 대한 WAL 기록 ${all}건 · 전체 WAL ${summary.first_lsn} ~ ${summary.last_lsn} · ${summary.time_range ? fmtTime(summary.time_range[0]) + " ~ " + fmtTime(summary.time_range[1]) + " UTC" : ""}` }),
+    el("div", { style: "margin:8px 0" }, sel), total > events.length ? el("div", { class: "hint", text: `${total}건 중 앞 ${events.length}건 표시` }) : null, tbl].filter(Boolean));
+}
+const IDX_STATUS = { orphan: "힙에 없음", dead: "힙 슬롯 DEAD", stale: "값 불일치", undecodable: "해석 불가" };
+async function loadIdx() {
+  const pane = $("#idxPane");
+  if (!S.rel) return;
+  const rel = S.rel;
+  if (!S.idxData) {
+    pane.replaceChildren(el("div", { class: "empty", text: "인덱스를 읽는 중…" }));
+    let d;
+    try { d = await api(relApi("/index-traces")); }
+    catch (e) { if (rel === S.rel) pane.replaceChildren(el("div", { class: "empty st-deleted", text: e.message })); return; }
+    if (rel !== S.rel) return;
+    S.idxData = d;
+  }
+  const { indexes, entries } = S.idxData;
+  const sum = el("table", { class: "grid" }, el("thead", {}, el("tr", {}, ["인덱스", "키 컬럼", "엔트리", "힙에 없음", "DEAD", "값 불일치", "해석 불가", "killed"].map(x => el("th", { text: x })))),
+    el("tbody", {}, indexes.map(i => el("tr", {}, el("td", { class: "mono", text: i.name + (i.primary ? " (PK)" : "") }), el("td", { class: "mono", text: i.columns.join(", ") }),
+      el("td", { text: i.supported ? i.total : "미지원" }), el("td", { class: i.orphan ? "st-deleted" : null, text: i.orphan }), el("td", { class: i.dead ? "st-deleted" : null, text: i.dead }),
+      el("td", { class: i.stale ? "st-updated" : null, text: i.stale }), el("td", { text: i.undecodable }), el("td", { text: i.killed })))));
+  const list = el("table", { class: "grid" }, el("thead", {}, el("tr", {}, ["인덱스", "상태", "가리키는 힙 위치", "키 값", "복구된 행"].map(x => el("th", { text: x })))),
+    el("tbody", {}, entries.map(e => el("tr", { class: e.status === "orphan" || e.status === "dead" ? "row-deleted" : "row-updated" },
+      el("td", { class: "mono", text: e.index }), el("td", { text: (IDX_STATUS[e.status] || e.status) + (e.killed ? " · killed" : "") }),
+      el("td", { class: "mono", text: `(${e.heap_tid.join(",")})` }), el("td", { class: "mono", text: JSON.stringify(e.keys) }),
+      el("td", {}, e.recovered ? el("span", { class: "link", text: `${SOURCE_LABEL[e.recovered.source]} · ${e.recovered.state}`,
+        onclick: () => { switchTab("paneData"); S.nav.push({ rel: S.rel, rids: S.rids, offset: S.offset }); S.rids = [e.recovered.rid]; S.offset = 0;
+                         withBusy(async () => { await loadRows(); const r = S.rows[0]; if (r) await openDetail(r); }); } }) : el("span", { class: "muted", text: "없음" }))))));
+  pane.replaceChildren(
+    el("div", { class: "muted", text: "행이 지워지고 힙에서 정리돼도 인덱스 엔트리는 인덱스 VACUUM 전까지 남는다. 힙에 없는 위치를 가리키는 키는 사라진 행의 흔적이다. HOT 정리로 생긴 REDIRECT 는 대상 행을 따라가 비교한다." }),
+    el("h3", { text: "인덱스별 요약" }), sum,
+    el("h3", { text: `흔적 ${entries.length}건` }), entries.length ? list : el("div", { class: "muted", text: "없음" }));
+}
+
+// ------------------------------------------------------------ 클러스터 정보
+async function renderInfo() {
+  const pane = $("#infoPane");
+  if (!S.info) return;
+  const { session: s, cluster: c, databases } = S.info, ctl = c.control;
+  const kvm = pairs => el("table", { class: "kv" }, pairs.map(([k, v]) => el("tr", {}, el("th", { text: k }), el("td", { class: "mono", text: v ?? "" }))));
+  const verifyBtn = el("button", { text: "원본 해시 다시 확인", onclick: async () => {
+    try { const r = await api(`/api/s/${S.sid}/verify`, { method: "POST" });
+      verifyBtn.textContent = r.same ? "✓ 열었을 때와 같음" : "✗ 해시가 바뀌었습니다"; } catch (e) { toast(e.message); } } });
+  const cards = [
+    el("div", { class: "card" }, el("h3", { text: "입력" }), kvm([
+      ["경로", s.input], ["형식", s.input_kind + (s.uploaded ? " (업로드 사본)" : "")], ["PGDATA 위치", s.pgdata],
+      ["SHA-256", s.hash ? `${s.hash.value} (${s.hash.kind}${s.hash.files ? ", " + s.hash.files + "개 파일" : ""})` : (s.hash_error || "계산 중…")],
+      ["열린 시각", s.opened_at]]), el("div", { style: "margin-top:8px" }, verifyBtn)),
+    el("div", { class: "card" }, el("h3", { text: "pg_control" }), kvm([
+      ["PG_VERSION", c.pg_version], ["구조", ctl.layout], ["CRC", ctl.crc_ok ? `일치 (${ctl.crc_stored})` : `불일치 stored ${ctl.crc_stored} / calc ${ctl.crc_calculated}`],
+      ["시스템 식별자", ctl.system_identifier], ["카탈로그 버전", ctl.catalog_version_no], ["상태", ctl.state_name],
+      ["마지막 갱신 (UTC)", ctl.time_utc], ["체크포인트 LSN", ctl.checkpoint_lsn], ["REDO LSN", ctl.ckpt_redo_lsn],
+      ["체크포인트 시각 (UTC)", ctl.ckpt_time_utc], ["다음 XID", ctl.ckpt_next_xid_xid != null ? `${ctl.ckpt_next_xid_epoch}:${ctl.ckpt_next_xid_xid}` : null],
+      ["다음 OID", ctl.ckpt_next_oid], ["timeline", ctl.ckpt_timeline], ["wal_level", ctl.wal_level_name],
+      ["블록 크기", ctl.blcksz], ["세그먼트 블록 수", ctl.relseg_size], ["WAL 세그먼트", ctl.xlog_seg_size],
+      ["TOAST 청크 최대", ctl.toast_max_chunk_size], ["데이터 체크섬", ctl.data_checksum_version ? `on (v${ctl.data_checksum_version})` : "off"],
+      ...(ctl.warnings || []).map(w => ["경고", w])])),
+    el("div", { class: "card" }, el("h3", { text: "데이터베이스 (pg_database)" }),
+      el("table", { class: "kv" }, databases.map(d => el("tr", {}, el("th", { class: "mono", text: d.name }),
+        el("td", { text: `oid ${d.oid} · ${d.is_template ? "템플릿 · " : ""}${d.collate || ""} · ${d.has_dir ? "base/" + d.oid : "폴더 없음"}` }))))),
+  ];
+  const walCard = el("div", { class: "card" }, el("h3", { text: "WAL (pg_wal)" }), el("div", { class: "muted", text: "읽는 중…" }));
+  cards.push(walCard);
+  if (S.dbData) cards.push(el("div", { class: "card" }, el("h3", { text: `해석 검증 (oid ${S.dbData.oid})` }),
+    el("table", { class: "kv" }, S.dbData.diagnostics.map(d => el("tr", {}, el("th", { text: d.check }),
+      el("td", {}, el("span", { class: d.ok ? "st-live" : "st-deleted", text: d.ok ? "✓ " : "✗ " }), d.detail || ""))))));
+  pane.replaceChildren(...cards);
+  try {
+    S.wal = S.wal || await api(`/api/s/${S.sid}/wal`);
+    const w = S.wal;
+    walCard.replaceChildren(el("h3", { text: "WAL (pg_wal)" }), !w.available ? el("div", { class: "st-deleted", text: w.error || "읽을 수 없음" }) :
+      el("div", {}, kvm([
+        ["레코드", `${w.records}개 (CRC 오류 ${w.crc_errors}, 해석 오류 ${w.decode_errors}, 이미지 오류 ${w.image_errors})`],
+        ["LSN 범위", `${w.first_lsn} ~ ${w.last_lsn}`],
+        ["시각 범위 (UTC)", w.time_range ? `${fmtTime(w.time_range[0])} ~ ${fmtTime(w.time_range[1])}` : "커밋 기록 없음"],
+        ["트랜잭션", `${w.xacts}개 (커밋/롤백 시각 확보)`],
+        ["연속 구간", w.runs.map(r => `${r.start}~${r.end} (${r.pages}p)`).join(", ")],
+        ["리소스 매니저별", Object.entries(w.by_rmgr).map(([k, v]) => `${k} ${v}`).join(" · ")]]),
+        el("h3", { text: "세그먼트 파일", style: "margin:10px 0 4px" }),
+        kvm(w.files.map(f => [f.name, `${f.pages}페이지 · 시작 ${f.first_lsn || "-"}${f.recycled ? " · 재활용(이름과 다른 옛 WAL 이 들어 있음)" : ""}`]))));
+  } catch (e) { walCard.replaceChildren(el("h3", { text: "WAL (pg_wal)" }), el("div", { class: "st-deleted", text: e.message })); }
+}
+
+// ------------------------------------------------------------ 탭 · 테마
+document.querySelectorAll(".tab").forEach(t => t.onclick = () => switchTab(t.dataset.pane));
+function switchTab(id) {
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("on", t.dataset.pane === id));
+  document.querySelectorAll(".pane").forEach(p => p.classList.toggle("on", p.id === id));
+  if (id === "paneWal") withBusy(loadWal);
+  if (id === "paneIdx") withBusy(loadIdx);
+}
+$("#themeBtn").onclick = () => {
+  const r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("pgv-theme", r.dataset.theme); } catch {}
+};
+try { const t = localStorage.getItem("pgv-theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+try { const p = localStorage.getItem("pgv-path"); if (p) $("#pathInput").value = p; } catch {}
+try { if (localStorage.getItem("pgv-time") === "1") $("#timeMode").checked = true; } catch {}
+$("#timeMode").addEventListener("change", e => { try { localStorage.setItem("pgv-time", e.target.checked ? "1" : "0"); } catch {} });
+$("#pathInput").addEventListener("change", e => { try { localStorage.setItem("pgv-path", e.target.value); } catch {} });
+
+// 바로 열기: ?path=<입력>&db=<DB 이름>&rel=<schema.table>&rid=<행 ID>&tab=<paneId>&time=1&chained=1
+(async () => {
+  const u = new URLSearchParams(location.search), path = u.get("path");
+  if (!path) return;
+  $("#pathInput").value = path;
+  if (u.get("time") === "1") $("#timeMode").checked = true;
+  await withBusy(async () => {
+    await openSession(await api("/api/open", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }) }));
+    const dbName = u.get("db");
+    if (dbName) {
+      const d = S.info.databases.find(x => x.name === dbName && x.has_dir);
+      if (!d) throw new Error(`데이터베이스 ${dbName} 없음`);
+      $("#dbSel").value = d.oid; await selectDb(d.oid);
+    }
+    const relName = u.get("rel");
+    if (relName) {
+      const [sc, nm] = relName.includes(".") ? relName.split(/\.(.*)/s) : ["public", relName];
+      const r = S.dbData.relations.find(x => x.schema === sc && x.name === nm);
+      if (!r) throw new Error(`릴레이션 ${relName} 없음`);
+      if (SYS_SCHEMAS.has(sc)) $("#showSys").checked = true;
+      await selectRel(r.oid);
+      if (u.get("chained") === "1") { $("#onlyChained").checked = true; S.chained = true; await loadRows(); }
+      const rid = u.get("rid") || (u.get("tid") ? "h:" + u.get("tid").replace(",", ":") : null);
+      if (rid) {
+        let row = S.rows.find(x => x.rid === rid);
+        if (!row) { S.rids = [rid]; await loadRows(); row = S.rows[0]; }
+        if (row) await openDetail(row, u.get("versions") === "1");
+      }
+    }
+    if (u.get("tab")) switchTab(u.get("tab"));
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+# 웹 계층만 외부 의존. 엔진(pgviewer/engine)은 표준 라이브러리만 쓴다.
+fastapi==0.162.0
+uvicorn==0.54.0
+python-multipart==0.0.32
